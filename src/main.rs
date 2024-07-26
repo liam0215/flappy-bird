@@ -4,6 +4,9 @@ use bevy::prelude::*;
 
 const BIRD_SCALE: f32 = 3.0; // Adjust this value to change the bird's size
 
+#[derive(Component)]
+struct Background;
+
 #[derive(Component, Debug)]
 pub struct AnimationTimer(Timer);
 
@@ -55,7 +58,7 @@ impl Default for PlayerBundle {
     fn default() -> Self {
         Self {
             velocity: Velocity {
-                value: Vec2::new(0., 0.),
+                value: Vec2::new(2., 0.),
             },
             gravity: Gravity {},
             player: Player {},
@@ -66,7 +69,7 @@ impl Default for PlayerBundle {
 pub struct GamePlugin;
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (setup_level, spawn_player))
+        app.add_systems(Startup, (setup_level, spawn_player).chain())
             .add_systems(
                 Update,
                 (
@@ -109,7 +112,6 @@ fn main() {
             GamePlugin,
         ))
         .insert_resource(Time::<Fixed>::from_duration(Duration::from_millis(16)))
-        .insert_resource(ClearColor(Color::srgb(0.53, 0.808, 0.922)))
         .run();
 }
 
@@ -176,7 +178,7 @@ fn spawn_ground(commands: &mut Commands) {
         SpriteBundle {
             sprite: Sprite {
                 color: Color::srgb(0.5, 0.5, 0.5),
-                custom_size: Some(Vec2::new(800.0, 300.0)),
+                custom_size: Some(Vec2::new(10000.0, 300.0)),
                 ..default()
             },
             transform: Transform::from_xyz(0.0, -400.0, 0.0),
@@ -190,8 +192,9 @@ fn spawn_camera(commands: &mut Commands) {
     commands.spawn((Camera2dBundle::default(), GameCamera));
 }
 
-fn setup_level(mut commands: Commands) {
+fn setup_level(mut commands: Commands, asset_server: Res<AssetServer>) {
     spawn_camera(&mut commands);
+    setup_background(&mut commands, asset_server);
     spawn_ground(&mut commands);
 }
 
@@ -319,4 +322,25 @@ fn handle_restart_event(
         spawn_player(commands, asset_server, texture_atlas_layouts);
         restart_events.clear();
     }
+}
+
+fn setup_background(commands: &mut Commands, asset_server: Res<AssetServer>) {
+    let background_image = asset_server.load("textures/Background5.png");
+    commands.spawn((
+        SpriteBundle {
+            texture: background_image,
+            transform: Transform {
+                // The scale might need adjusting depending on your image size and desired coverage
+                scale: Vec3::new(1.0, 1.0, 1.0),
+                translation: Vec3::new(200.0, 300.0, -1.0),
+                ..default()
+            },
+            sprite: Sprite {
+                custom_size: Some(Vec2::new(1200.0, 1200.0)), // Match this to your window size
+                ..default()
+            },
+            ..default()
+        },
+        Background,
+    ));
 }
