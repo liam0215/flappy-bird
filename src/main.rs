@@ -1,10 +1,14 @@
 use std::time::Duration;
-
 use bevy::prelude::*;
 
-const BIRD_SCALE: f32 = 3.0; // Adjust this value to change the bird's size
+const BIRD_SCALE: f32 = 1.0; // Adjust this value to change the bird's size
+const GROUND_SCALE: f32 = 2.0; // Adjust this value to change the ground's size
+const PIPE_SCALE: Vec3 = Vec3::new(3., 5., 1.); // Adjust this value to change the pipe's size
 
-#[derive(Component)]
+#[derive(Component, Debug)]
+struct Pipe;
+
+#[derive(Component, Debug)]
 struct Background;
 
 #[derive(Component, Debug)]
@@ -82,10 +86,11 @@ impl Plugin for GamePlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    update_position,
+                    update_player_position,
                     apply_gravity,
                     check_collision,
                     camera_follow_player,
+                    update_bg_position,
                 )
                     .chain(),
             )
@@ -120,15 +125,15 @@ fn spawn_player(
     asset_server: Res<AssetServer>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
 ) {
-    let texture_handle = asset_server.load("textures/Bird1-1.png");
-    let layout = TextureAtlasLayout::from_grid(UVec2::new(16, 16), 4, 1, None, None);
+    let texture_handle = asset_server.load("textures/mooslisprites.png");
+    let layout = TextureAtlasLayout::from_grid(UVec2::new(180, 100), 2, 1, None, None);
     let texture_atlas_layout = texture_atlas_layouts.add(layout);
-    let animation_indices = AnimationIndices { first: 0, last: 3 };
+    let animation_indices = AnimationIndices { first: 0, last: 1 };
     commands.spawn((
         SpriteBundle {
             texture: texture_handle,
             transform: Transform {
-                translation: Vec3::new(0.0, 0.0, 0.0), // Position the player at the center
+                translation: Vec3::new(0.0, 0.0, 2.0), // Position the player at the center
                 scale: Vec3::splat(BIRD_SCALE),
                 ..Default::default()
             },
@@ -140,7 +145,7 @@ fn spawn_player(
         },
         PlayerBundle::default(),
         animation_indices,
-        AnimationTimer(Timer::from_seconds(0.1, TimerMode::Repeating)),
+        AnimationTimer(Timer::from_seconds(0.3, TimerMode::Repeating)),
     ));
 }
 
@@ -160,11 +165,21 @@ fn animate_sprite(
     }
 }
 
-fn update_position(mut query: Query<(&Velocity, &mut Transform)>) {
+fn update_player_position(mut query: Query<(&Velocity, &mut Transform), With<Player>>) {
     for (velocity, mut transform) in query.iter_mut() {
         transform.translation.x += velocity.value.x;
         transform.translation.y += velocity.value.y;
     }
+}
+
+fn update_bg_position(
+    camera_query: Query<(&Transform, &GameCamera), Without<Background>>,
+    mut bg_query: Query<&mut Transform, With<Background>>,
+) {
+    let (camera, _) = camera_query.single();
+    let mut bg = bg_query.single_mut();
+
+    bg.translation.x = camera.translation.x;
 }
 
 fn apply_gravity(mut query: Query<&mut Velocity, With<Gravity>>) {
@@ -173,29 +188,34 @@ fn apply_gravity(mut query: Query<&mut Velocity, With<Gravity>>) {
     }
 }
 
-fn spawn_ground(commands: &mut Commands) {
-    commands.spawn((
-        SpriteBundle {
-            sprite: Sprite {
-                color: Color::srgb(0.5, 0.5, 0.5),
-                custom_size: Some(Vec2::new(10000.0, 300.0)),
+fn spawn_ground(commands: &mut Commands, asset_server: &Res<AssetServer>) {
+    let ground_image = asset_server.load("textures/ground.png");
+    for i in 0..100 {
+        commands.spawn((
+            SpriteBundle {
+                texture: ground_image.clone(),
+                transform: Transform::from_xyz(64. * ((i as f32) - 5.), -268., 0.0)
+                    .with_scale(Vec3::splat(GROUND_SCALE)),
                 ..default()
             },
-            transform: Transform::from_xyz(0.0, -400.0, 0.0),
-            ..default()
-        },
-        Ground,
-    ));
+            Ground,
+        ));
+    }
 }
 
 fn spawn_camera(commands: &mut Commands) {
     commands.spawn((Camera2dBundle::default(), GameCamera));
 }
 
-fn setup_level(mut commands: Commands, asset_server: Res<AssetServer>) {
+fn setup_level(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
+) {
     spawn_camera(&mut commands);
-    setup_background(&mut commands, asset_server);
-    spawn_ground(&mut commands);
+    setup_background(&mut commands, &asset_server);
+    spawn_ground(&mut commands, &asset_server);
+    spawn_pipe(&mut commands, &asset_server, &mut texture_atlas_layouts);
 }
 
 fn camera_follow_player(
@@ -230,6 +250,7 @@ fn check_collision(
     mut commands: Commands,
     player_query: Query<(Entity, &Transform), With<Player>>,
     ground_query: Query<&Transform, With<Ground>>,
+    pipe_query: Query<&Transform, With<Pipe>>,
     mut game_over_events: EventWriter<GameOverEvent>,
     game_state: Res<GameState>,
 ) {
@@ -237,19 +258,33 @@ fn check_collision(
         return;
     }
 
-    let Ok((player_entity, player_transform)) = player_query.get_single() else {
-        return;
-    };
-    let Ok(ground_transform) = ground_query.get_single() else {
-        return;
-    };
+    let (player_entity, player_transform) = player_query.single();
+    let ground_transform = ground_query.iter().next().unwrap();
 
-    let player_y = player_transform.translation.y - (8.0 * BIRD_SCALE);
-    let ground_y = ground_transform.translation.y + 150.0;
+    let player_y = player_transform.translation.y - (50.0 * BIRD_SCALE);
+    let ground_y = ground_transform.translation.y + (16.0 * GROUND_SCALE);
 
     if player_y <= ground_y {
         game_over_events.send(GameOverEvent);
         commands.entity(player_entity).despawn();
+    } else {
+        for pipe_transform in pipe_query.iter() {
+            let pipe_x = pipe_transform.translation.x;
+            let pipe_y = pipe_transform.translation.y;
+            let player_x = player_transform.translation.x;
+            let player_y = player_transform.translation.y;
+            let pipe_half_w = (32. * PIPE_SCALE.x) / 2.0;
+            let pipe_half_h = (48. * PIPE_SCALE.y) / 2.0;
+            let player_half_w = - (90.0 * BIRD_SCALE) / 2.0;
+            let player_half_h = (50.0 * BIRD_SCALE) / 2.0;
+            if player_x + player_half_w >= pipe_x - pipe_half_w && player_x - player_half_w <= pipe_x + pipe_half_w {
+                if player_y + player_half_h >= pipe_y - pipe_half_h && player_y - player_half_h <= pipe_y + pipe_half_h {
+                    game_over_events.send(GameOverEvent);
+                    commands.entity(player_entity).despawn();
+                    break;
+                }
+            }
+        }
     }
 }
 
@@ -299,7 +334,6 @@ fn handle_restart_event(
     mut game_state: ResMut<GameState>,
     mut restart_events: EventReader<RestartEvent>,
     player_query: Query<Entity, With<Player>>,
-    ground_query: Query<Entity, With<Ground>>,
     game_over_text_query: Query<Entity, With<GameOverText>>,
     asset_server: Res<AssetServer>,
     texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
@@ -309,22 +343,17 @@ fn handle_restart_event(
         game_state.is_game_over = false;
 
         // Despawn existing entities
-        for entity in player_query
-            .iter()
-            .chain(ground_query.iter())
-            .chain(game_over_text_query.iter())
-        {
+        for entity in player_query.iter().chain(game_over_text_query.iter()) {
             commands.entity(entity).despawn();
         }
 
         // Respawn player and ground
-        spawn_ground(&mut commands);
         spawn_player(commands, asset_server, texture_atlas_layouts);
         restart_events.clear();
     }
 }
 
-fn setup_background(commands: &mut Commands, asset_server: Res<AssetServer>) {
+fn setup_background(commands: &mut Commands, asset_server: &Res<AssetServer>) {
     let background_image = asset_server.load("textures/Background5.png");
     commands.spawn((
         SpriteBundle {
@@ -332,15 +361,44 @@ fn setup_background(commands: &mut Commands, asset_server: Res<AssetServer>) {
             transform: Transform {
                 // The scale might need adjusting depending on your image size and desired coverage
                 scale: Vec3::new(1.0, 1.0, 1.0),
-                translation: Vec3::new(200.0, 300.0, -1.0),
+                translation: Vec3::new(0., 100., -1.0),
                 ..default()
             },
             sprite: Sprite {
-                custom_size: Some(Vec2::new(1200.0, 1200.0)), // Match this to your window size
+                custom_size: Some(Vec2::new(756., 756.)), // Match this to your window size
                 ..default()
             },
             ..default()
         },
         Background,
     ));
+}
+
+fn spawn_pipe(
+    commands: &mut Commands,
+    asset_server: &Res<AssetServer>,
+    texture_atlas_layouts: &mut ResMut<Assets<TextureAtlasLayout>>,
+) {
+    let texture_handle = asset_server.load("textures/PipeStyle5.png");
+    let layout = TextureAtlasLayout::from_grid(UVec2::new(32, 48), 4, 2, None, None);
+    let texture_atlas_layout = texture_atlas_layouts.add(layout);
+    for i in 0..100 {
+        let y = if rand::random() { -200. } else { 250. };
+        commands.spawn((
+            SpriteBundle {
+                texture: texture_handle.clone(),
+                transform: Transform {
+                    translation: Vec3::new(400. + (400. * (i as f32)), y, 1.0), // Position the player at the center
+                    scale: PIPE_SCALE,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            TextureAtlas {
+                layout: texture_atlas_layout.clone(),
+                index: 0,
+            },
+            Pipe,
+        ));
+    }
 }
